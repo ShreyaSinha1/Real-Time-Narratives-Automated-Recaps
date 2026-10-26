@@ -1,22 +1,58 @@
 import streamlit as st
 import pandas as pd
 import time
-from langchain_openai import ChatOpenAI
+import os
+import requests
+from dotenv import load_dotenv
+from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
-# Initialize Streamlit Page Config
-st.set_page_config(page_title="Football Innovation Studio", layout="wide")
-st.title("⚽ Real-Time Football Narratives & Automated Recaps")
+# 🛠️ Load environment variables from the local .env file
+load_dotenv()
 
-# Initialize LLM (Ensure OPENAI_API_KEY environment variable is set)
-try:
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.7)
-except Exception:
-    st.error("Please set your OPENAI_API_KEY environment variable.")
+# Initialize Streamlit Page Config
+st.set_page_config(page_title="Premier League Studio - Match Insights Engine", layout="wide")
+st.title("⚽ Synthetic Match Insights Engine | Real-Time Narratives & Automated Recaps")
+
+# 🔑 Fetch API Credentials from .env
+groq_api_key = os.getenv("GROQ_API_KEY")
+if not groq_api_key:
+    st.error("❌ Missing Credentials: Could not find 'GROQ_API_KEY' inside your .env file.")
     st.stop()
 
-# 1. Mock Database of Live Events (Simulating real-time API feeds)
+# 📡 Dynamically fetch current active models from Groq using the .env token
+@st.cache_data(show_spinner=False)
+def fetch_active_groq_models(api_key):
+    try:
+        url = "https://groq.com"
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        response = requests.get(url, headers=headers, timeout=5)
+        if response.status_code == 200:
+            models_data = response.json().get("data", [])
+            # Filter out audio/whisper models to show text models only
+            model_ids = [m["id"] for m in models_data if "whisper" not in m["id"].lower()]
+            if model_ids:
+                return sorted(model_ids)
+    except Exception:
+        pass
+    # Updated active fallbacks reflecting recent Groq model deprecations
+    return ["qwen/qwen3.8-27b", "openai/gpt-oss-20b"]
+
+# Sidebar layout configuration for Model Selection
+st.sidebar.header("🤖 Engine Configuration")
+available_models = fetch_active_groq_models(groq_api_key)
+selected_model = st.sidebar.selectbox("Select Active Free Model:", available_models)
+st.sidebar.success(f"Running engine on: `{selected_model}`")
+
+# Initialize Free LLM Engine using the selected model and credentials
+try:
+    llm = ChatGroq(model=selected_model, temperature=0.7, groq_api_key=groq_api_key)
+except Exception as e:
+    st.error(f"Failed to initialize Free LLM Engine. Error details: {e}")
+    st.stop()
+
+# Mock Database of Live Events (Simulating real-time Premier League API feeds)
 mock_events = [
     {"minute": "01'", "team": "Arsenal", "player": "Bukayo Saka", "event": "Kickoff", "detail": "Match begins at the Emirates."},
     {"minute": "14'", "team": "Chelsea", "player": "Cole Palmer", "event": "Yellow Card", "detail": "Tactical foul stopping a counter-attack."},
@@ -34,7 +70,7 @@ if "current_step" not in st.session_state:
 if "narrative_log" not in st.session_state:
     st.session_state.narrative_log = []
 
-# 2. Prompts for Narrative & Recap Generation
+# Prompts for Narrative & Recap Generation
 narrative_prompt = ChatPromptTemplate.from_messages([
     ("system", "You are an elite, dramatic football live-text commentator. Turn the provided event into an engaging, single-paragraph narrative update. Keep it punchy, matching the game tempo."),
     ("user", "Minute: {minute} | Team: {team} | Player: {player} | Event: {event} | Context: {detail}")
@@ -45,11 +81,12 @@ recap_prompt = ChatPromptTemplate.from_messages([
     ("user", "Full Match Log:\n{full_log}")
 ])
 
+# Build pipeline chains
 narrative_chain = narrative_prompt | llm | StrOutputParser()
 recap_chain = recap_prompt | llm | StrOutputParser()
 
 # UI Layout Components
-col1, col2 = st.columns([1, 1])
+col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("📡 Live Match Event Stream")
@@ -61,14 +98,17 @@ with col1:
         
         # Run Live Narrative Generation
         with st.spinner("Generating live narrative..."):
-            narrative = narrative_chain.invoke({
-                "minute": event["minute"],
-                "team": event["team"],
-                "player": event["player"],
-                "event": event["event"],
-                "detail": event["detail"]
-            })
-            st.session_state.narrative_log.insert(0, {"minute": event["minute"], "text": narrative})
+            try:
+                narrative = narrative_chain.invoke({
+                    "minute": event["minute"],
+                    "team": event["team"],
+                    "player": event["player"],
+                    "event": event["event"],
+                    "detail": event["detail"]
+                })
+                st.session_state.narrative_log.insert(0, {"minute": event["minute"], "text": narrative})
+            except Exception as api_err:
+                st.error(f"Engine Error: {api_err}")
             
     # Display the live commentary feed
     for comment in st.session_state.narrative_log:
@@ -83,7 +123,10 @@ with col2:
         full_log_str = "\n".join([f"{e['minute']} - {e['team']} - {e['player']} - {e['event']}: {e['detail']}" for e in mock_events])
         
         with st.spinner("Compiling tactical match review..."):
-            final_recap = recap_chain.invoke({"full_log": full_log_str})
-            st.markdown(final_recap)
+            try:
+                final_recap = recap_chain.invoke({"full_log": full_log_str})
+                st.markdown(final_recap)
+            except Exception as api_err:
+                st.error(f"Failed to generate recap: {api_err}")
     else:
         st.info(f"Progressing through match events ({st.session_state.current_step}/{len(mock_events)}). Complete the match to generate the full automated summary.")
